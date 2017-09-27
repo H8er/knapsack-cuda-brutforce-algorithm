@@ -1,0 +1,2 @@
+# knapsack-cuda-brutforce-algorithm
+Comparing of brutforce parallel method on GPU using CUDA against CPU consistent version
