@@ -46,7 +46,7 @@ __global__ void zeroing(int *w, int *s, int W) {
 	if (w[bli+idx] > W) { s[bli + idx] = 0; w[bli + idx] = 0; }
 }
 __global__ void reduction_max(int* s) {
-	__shared__ int sdata[1024];
+	extern __shared__ int sdata[];
 	// each thread loads one element from global to shared mem
 	unsigned int tid = threadIdx.x;
 	unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
@@ -79,7 +79,7 @@ int main()
 {
 		int W = 300;
 		int arraySize;
-		cout<<"Enter size of array (10-15): ";
+		cout<<"Enter size of array (6-15): ";
 		cin>>arraySize;
 
 		struct timeval t0,t1;
@@ -87,6 +87,9 @@ int main()
 
 		int totalSize = arraySize*pow(2,arraySize);
 		int strSize_b = pow(2,arraySize);
+		if (arraySize>15){
+			strSize_b/=(pow(2,(arraySize-15)));
+		}
 		int *Sum=new int[totalSize];// = { 0 };
 		int *s;
 		int *bin_dev;
@@ -119,8 +122,8 @@ int main()
 //multiplication of weight and value parameters of each item on binary table strings
 		bin_multiplication << <strSize_b, arraySize >> > (bin_dev, wight_dev, s_dev, values_dev);
 
-		summing << <strSize_b, arraySize,arraySize >> > (bin_dev, w);
-		summing << <strSize_b, arraySize,arraySize >> > (s_dev, s);
+		summing << <strSize_b, arraySize,arraySize*sizeof(int) >> > (bin_dev, w);
+		summing << <strSize_b, arraySize,arraySize*sizeof(int) >> > (s_dev, s);
 //zeroing of unsuitable item's combinations
 
 int a=strSize_b/1024;
@@ -130,7 +133,7 @@ if (a==0){a=1;
 
 		zeroing << <a, b >> > (w, s, W);
 //finding maximal value for each block
-		reduction_max << <a, b >> > (s);
+		reduction_max << <a,b,b*sizeof(int) >> > (s);
 //second step of finding maximal value
 		for (int i = 32; i >= 1; i /= 2) {
 			kermax2 << <1, i >> > (s,i);
