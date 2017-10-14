@@ -32,13 +32,20 @@ __global__ void summing(int* in_dev, int* sums) {
 	//__syncthreads();
 	//unroled summing is faster than reduction according to my tests
 #pragma unroll
-for(int i=1;i<15;i++){
+for(ushort  i = 1;i < 16;i++){
 	sdata[0]+=sdata[i];
 }
-		//__syncthreads();
+		__syncthreads();
 	// write result for this block to global mem
 	sums[blockIdx.x] = sdata[0];
 }
+
+__global__ void additional_summing(int *whatToAdd,int *whereToAdd){
+	unsigned int tid = threadIdx.x;
+	unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
+	whereToAdd[i+32768] = whereToAdd[i]+whatToAdd[15];
+}
+
 
 __global__ void zeroing(int *w, int *s, int W) {
 	int bli = blockIdx.x * blockDim.x;
@@ -77,18 +84,20 @@ __global__ void kermax2(int *s, int N) {
 
 int main()
 {
-		int W = 300;
+		int W = 350;
 		int arraySize;
 		cout<<"Enter size of array (6-15): ";
-		cin>>arraySize;
+		cin>>arraySize;		
 
 		struct timeval t0,t1;
 			gettimeofday(&t0, NULL);
 
 		int totalSize = arraySize*pow(2,arraySize);
 		int strSize_b = pow(2,arraySize);
+		int flag=0;
 		if (arraySize>15){
 			strSize_b/=(pow(2,(arraySize-15)));
+			flag=1;
 		}
 		int *Sum=new int[totalSize];// = { 0 };
 		int *s;
@@ -119,21 +128,35 @@ int main()
 
 //creating of binary table
 		T_binary << <strSize_b, arraySize >> > (bin_dev, dev_del);
+
 //multiplication of weight and value parameters of each item on binary table strings
 		bin_multiplication << <strSize_b, arraySize >> > (bin_dev, wight_dev, s_dev, values_dev);
 
 		summing << <strSize_b, arraySize,arraySize*sizeof(int) >> > (bin_dev, w);
 		summing << <strSize_b, arraySize,arraySize*sizeof(int) >> > (s_dev, s);
+
+		int a=strSize_b/1024;
+		int b = 1024;
+		if (a==0){
+			a=1;
+			b = pow(2,arraySize);}
+
+		//additional actions if flag==1
+		if(flag==1){
+additional_summing<<<a, b>>>(wight_dev,w);
+additional_summing<<<a, b>>>(values_dev,s);
+		}
+
 //zeroing of unsuitable item's combinations
 
-int a=strSize_b/1024;
-int b = 1024;
-if (a==0){a=1;
-	b = pow(2,arraySize);}
+
 
 		zeroing << <a, b >> > (w, s, W);
+
 //finding maximal value for each block
 		reduction_max << <a,b,b*sizeof(int) >> > (s);
+		cudaMemcpy(Sum, s, a*sizeof(int), cudaMemcpyDeviceToHost);
+		for(int i=0;i<a;i++){cout<<Sum[i]<<" ";}
 //second step of finding maximal value
 		for (int i = 32; i >= 1; i /= 2) {
 			kermax2 << <1, i >> > (s,i);
