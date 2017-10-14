@@ -78,8 +78,8 @@ __global__ void kermax2(int *s, int N) {
 int main()
 {
 		int W = 300;
-		int arraySize = 15;
-		cout<<"Enter size of array, more than 9 and less than 16: ";
+		int arraySize;
+		cout<<"Enter size of array (10-15): ";
 		cin>>arraySize;
 
 		struct timeval t0,t1;
@@ -91,8 +91,8 @@ int main()
 		int *s;
 		int *bin_dev;
 		int *wight_dev;
-		int wight[15] = { 5,10,17,19,20, 23,26,30,32,38, 40,44,47,50,55 };// 55, 56, 60, 62, 66, 70	};
-		int values[15] = { 10,13,16,22,30, 25,55,90,110,115, 130,120,150,170,194 };// , 194, 199, 217, 230, 248	};
+		int wight[16] = { 5,10,17,19,20, 23,26,30,32,38, 40,44,47,50,55,56 };// 55, 56, 60, 62, 66, 70	};
+		int values[16] = { 10,13,16,22,30, 25,55,90,110,115, 130,120,150,170,194,199 };// , 194, 199, 217, 230, 248	};
 		int *w;
 		int *values_dev;
 
@@ -101,9 +101,6 @@ int main()
 		for (int i = 0; i < arraySize; i++) {
 			del[i] = pow(2, i);
 		}
-
-		float gpu_elapsed_time=0;
-cudaEvent_t gpu_start, gpu_stop;
 
 		cudaMemcpy(dev_del, del, arraySize * sizeof(int), cudaMemcpyHostToDevice);
 		cudaMalloc((void**)&bin_dev, totalSize * sizeof(int));
@@ -122,23 +119,18 @@ cudaEvent_t gpu_start, gpu_stop;
 //multiplication of weight and value parameters of each item on binary table strings
 		bin_multiplication << <strSize_b, arraySize >> > (bin_dev, wight_dev, s_dev, values_dev);
 
-		cudaEventCreate(&gpu_start);
-		cudaEventCreate(&gpu_stop);
-		cudaEventRecord(gpu_start, 0);
-
 		summing << <strSize_b, arraySize,arraySize >> > (bin_dev, w);
-		cudaEventRecord(gpu_stop, 0);
-		cudaEventSynchronize(gpu_stop);
-		cudaEventElapsedTime(&gpu_elapsed_time, gpu_start, gpu_stop);
-		cudaEventDestroy(gpu_start);
-		cudaEventDestroy(gpu_stop);
-cout << "Summing time " << gpu_elapsed_time << " milli-seconds\n";
-
 		summing << <strSize_b, arraySize,arraySize >> > (s_dev, s);
 //zeroing of unsuitable item's combinations
-		zeroing << <strSize_b/1024, 1024 >> > (w, s, W);
+
+int a=strSize_b/1024;
+int b = 1024;
+if (a==0){a=1;
+	b = pow(2,arraySize);}
+
+		zeroing << <a, b >> > (w, s, W);
 //finding maximal value for each block
-		reduction_max << <strSize_b/1024, 1024 >> > (s);
+		reduction_max << <a, b >> > (s);
 //second step of finding maximal value
 		for (int i = 32; i >= 1; i /= 2) {
 			kermax2 << <1, i >> > (s,i);
