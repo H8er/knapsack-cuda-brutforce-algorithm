@@ -78,8 +78,8 @@ __global__ void kermax2(int *s, int N) {
 int main()
 {
 		int W = 300;
-		int arraySize;
-		cout<<"Enter size of array (10-15): ";
+		int arraySize = 15;
+		cout<<"Enter size of array, more than 9 and less than 16: ";
 		cin>>arraySize;
 
 		struct timeval t0,t1;
@@ -91,8 +91,8 @@ int main()
 		int *s;
 		int *bin_dev;
 		int *wight_dev;
-		int wight[16] = { 5,10,17,19,20, 23,26,30,32,38, 40,44,47,50,55,56 };// 55, 56, 60, 62, 66, 70	};
-		int values[16] = { 10,13,16,22,30, 25,55,90,110,115, 130,120,150,170,194,199 };// , 194, 199, 217, 230, 248	};
+		int wight[15] = { 5,10,17,19,20, 23,26,30,32,38, 40,44,47,50,55 };// 55, 56, 60, 62, 66, 70	};
+		int values[15] = { 10,13,16,22,30, 25,55,90,110,115, 130,120,150,170,194 };// , 194, 199, 217, 230, 248	};
 		int *w;
 		int *values_dev;
 
