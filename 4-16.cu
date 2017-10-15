@@ -31,7 +31,7 @@ __global__ void summing(int* in_dev, int* sums) {
 	sdata[tid] = in_dev[i];
 	//__syncthreads();
 	//unroled summing is faster than reduction according to my tests
-#pragma unroll
+#pragma unroll 
 for(ushort  i = 1;i < 16;i++){
 	sdata[0]+=sdata[i];
 }
@@ -87,7 +87,7 @@ int main()
 		int W = 350;
 		int arraySize;
 		cout<<"Enter size of array (6-15): ";
-		cin>>arraySize;		
+		cin>>arraySize;
 
 		struct timeval t0,t1;
 			gettimeofday(&t0, NULL);
