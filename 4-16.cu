@@ -69,7 +69,7 @@ __global__ void reduction_max(int* s) {
 	if (tid == 0) s[blockIdx.x] = sdata[0];
 }
 
-__global__ void kermax2(int *s, int N) {
+__global__ void cycle_max(int *s, int N) {
 	//__shared__ int max[32];
 	unsigned int tid = threadIdx.x;
 	int off = N / 2;
@@ -153,11 +153,11 @@ additional_summing<<<a, b>>>(values_dev,s);
 		reduction_max << <a,b,b*sizeof(int) >> > (s);
 
 if(flag==1){
-kermax2 << <2, 32 >> > (s,32);
+cycle_max << <2, 32 >> > (s,32);
 }
 //second step of finding maximal value
 		for (int i = a; i >= 1; i /= 2) {
-			kermax2 << <1, i >> > (s,i);
+			cycle_max << <1, i >> > (s,i);
 		}
 
 		cudaMemcpy(Sum, s, sizeof(int), cudaMemcpyDeviceToHost);
