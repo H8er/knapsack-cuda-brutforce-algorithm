@@ -3,7 +3,6 @@
 #include "device_launch_parameters.h"
 #include "device_functions.h"
 #include <cstdlib>
-#include <stdlib.h>
 #include <sys/time.h>
 #include <iostream>
 
@@ -16,11 +15,11 @@ __global__ void T_binary(int*bin_dev, int *_del) {
 	bin_dev[bli + idx] = blockIdx.x / _del[idx] % 2;
 }
 
-__global__ void bin_multiplication(int *bin_dev, int* wight_dev, int *s_dev, int*values_dev)
+__global__ void bin_multiplication(int *bin_dev, int* weight_dev, int *s_dev, int*values_dev)
 {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	s_dev[i] = bin_dev[i] * values_dev[threadIdx.x];//s_dev -> prices*bin
-	bin_dev[i] = bin_dev[i] * wight_dev[threadIdx.x];//bin_dev -> weights*bin
+	bin_dev[i] = bin_dev[i] * weight_dev[threadIdx.x];//bin_dev -> weights*bin
 }
 
 __global__ void summing(int* in_dev, int* sums) {
@@ -31,8 +30,8 @@ __global__ void summing(int* in_dev, int* sums) {
 	sdata[tid] = in_dev[i];
 	//__syncthreads();
 	//unroled summing is faster than reduction according to my tests
-#pragma unroll 
-for(ushort  i = 1;i < 16;i++){
+#pragma unroll
+for(ushort  i = 1;i < 15;i++){
 	sdata[0]+=sdata[i];
 }
 		__syncthreads();
@@ -41,7 +40,6 @@ for(ushort  i = 1;i < 16;i++){
 }
 
 __global__ void additional_summing(int *whatToAdd,int *whereToAdd){
-	unsigned int tid = threadIdx.x;
 	unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
 	whereToAdd[i+32768] = whereToAdd[i]+whatToAdd[15];
 }
@@ -102,8 +100,8 @@ int main()
 		int *Sum=new int[totalSize];// = { 0 };
 		int *s;
 		int *bin_dev;
-		int *wight_dev;
-		int wight[16] = { 5,10,17,19,20, 23,26,30,32,38, 40,44,47,50,55,56 };// 55, 56, 60, 62, 66, 70	};
+		int *weight_dev;
+		int weight[16] = { 5,10,17,19,20, 23,26,30,32,38, 40,44,47,50,55,56 };// 55, 56, 60, 62, 66, 70	};
 		int values[16] = { 10,13,16,22,30, 25,55,90,110,115, 130,120,150,170,194,199 };// , 194, 199, 217, 230, 248	};
 		int *w;
 		int *values_dev;
@@ -119,46 +117,46 @@ int main()
 
 		int*s_dev;
 		cudaMalloc((void**)&s_dev, totalSize * sizeof(int));
-		cudaMalloc((void**)&wight_dev, arraySize * sizeof(int));
+		cudaMalloc((void**)&weight_dev, arraySize * sizeof(int));
 		cudaMalloc((void**)&s, totalSize * sizeof(int));
 		cudaMalloc((void**)&values_dev, arraySize * sizeof(int));
 		cudaMalloc((void**)&w, totalSize * sizeof(int));
-		cudaMemcpy(wight_dev, wight, arraySize * sizeof(int), cudaMemcpyHostToDevice);
+		cudaMemcpy(weight_dev, weight, arraySize * sizeof(int), cudaMemcpyHostToDevice);
 		cudaMemcpy(values_dev, values, arraySize * sizeof(int), cudaMemcpyHostToDevice);
 
 //creating of binary table
 		T_binary << <strSize_b, arraySize >> > (bin_dev, dev_del);
 
 //multiplication of weight and value parameters of each item on binary table strings
-		bin_multiplication << <strSize_b, arraySize >> > (bin_dev, wight_dev, s_dev, values_dev);
+		bin_multiplication << <strSize_b, arraySize >> > (bin_dev, weight_dev, s_dev, values_dev);
 
 		summing << <strSize_b, arraySize,arraySize*sizeof(int) >> > (bin_dev, w);
 		summing << <strSize_b, arraySize,arraySize*sizeof(int) >> > (s_dev, s);
 
-		int a=strSize_b/1024;
+		int a=totalSize/arraySize/1024;
 		int b = 1024;
 		if (a==0){
 			a=1;
 			b = pow(2,arraySize);}
-
 		//additional actions if flag==1
 		if(flag==1){
-additional_summing<<<a, b>>>(wight_dev,w);
+additional_summing<<<a, b>>>(weight_dev,w);
 additional_summing<<<a, b>>>(values_dev,s);
 		}
 
 //zeroing of unsuitable item's combinations
 
-
-
 		zeroing << <a, b >> > (w, s, W);
 
 //finding maximal value for each block
+
 		reduction_max << <a,b,b*sizeof(int) >> > (s);
-		cudaMemcpy(Sum, s, a*sizeof(int), cudaMemcpyDeviceToHost);
-		for(int i=0;i<a;i++){cout<<Sum[i]<<" ";}
+
+if(flag==1){
+kermax2 << <2, 32 >> > (s,32);
+}
 //second step of finding maximal value
-		for (int i = 32; i >= 1; i /= 2) {
+		for (int i = a; i >= 1; i /= 2) {
 			kermax2 << <1, i >> > (s,i);
 		}
 
@@ -167,13 +165,15 @@ additional_summing<<<a, b>>>(values_dev,s);
 		cout <<"\n"<<"GPU max = " << Sum[0];
 
 		cudaFree(bin_dev);
-		cudaFree(wight_dev);
+		cudaFree(weight_dev);
 		cudaFree(s);
 		cudaFree(w);
 		cudaFree(s_dev);
 
 		//CPU version
-		float fTimeStart = clock() / (float)(CLOCKS_PER_SEC);
+
+		//float fTimeStart = clock() / (float)(CLOCKS_PER_SEC);
+		if(flag==1){strSize_b*=2;}
 		int **bin = new int*[strSize_b];
 			for(int i=0;i<strSize_b;i++){
 				bin[i] = new int[arraySize];
@@ -189,7 +189,7 @@ additional_summing<<<a, b>>>(values_dev,s);
 
 		int **prices  = new int*[strSize_b];
 		int **weights = new int*[strSize_b];
-			for(int i=0;i<strSize_b;i++){
+			for(int i = 0; i < strSize_b; i++){
 				prices[i]  = new int[arraySize];
 				weights[i] = new int[arraySize];
 			}
@@ -198,30 +198,34 @@ additional_summing<<<a, b>>>(values_dev,s);
 		int *Sval = new int[strSize_b];
 		for (int i = 0; i < strSize_b; i++) {
 			for (int j = 0; j < arraySize; j++) {
-				weights[i][j] = wight[j] * bin[i][j];
-				prices[i][j] = values[j] * bin[i][j];
+				weights[i][j] = weight[j] * bin[i][j];
+				prices[i][j]  = values[j] * bin[i][j];
 			}
 		}
+
 		for (int i = 0; i < strSize_b; i++) {
+			Sweig[i] = 0 ;Sval[i] = 0;
 			for (int j = 0; j < arraySize; j++) {
 				Sweig[i] += weights[i][j];
-				Sval[i] += prices[i][j];
+				Sval[i]  += prices[i][j];
 			}
 		}
+
 		int max = 0; k = 0;
 		for (int i = 0; i < strSize_b; i++) {
 			if ((Sweig[i] <= W) && (Sval[i] > max)) {
-				k = i; max = Sval[i];
+				//k = i;
+				max = Sval[i];
 			}
 		}
-		float fTimeStop = clock() / (float)CLOCKS_PER_SEC;
+		//float fTimeStop = clock() / (float)CLOCKS_PER_SEC;
 		cout << "   CPU max = " << max << "\n";
 		//cout << "CPU time is " << (fTimeStop - fTimeStart) * 1000 << " milli-seconds\n";
 //memory freeing
-		for(int i=0;i<strSize_b;i++){
-			delete [] bin[strSize_b];
-			delete [] prices[strSize_b];
-			delete [] weights[strSize_b];
+		for(int i = 0; i < strSize_b; i++){
+			delete [] bin[i];
+			delete [] prices[i];
+			delete [] weights[i];
 		}
 		delete [] Sweig;
 		delete [] Sval;
@@ -230,5 +234,6 @@ gettimeofday(&t1, 0);
 long sec = (t1.tv_sec-t0.tv_sec);
 long usec =  t1.tv_usec-t0.tv_usec;
 cout<<sec<<","<<usec;
+
 return 0;
 }
