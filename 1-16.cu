@@ -84,7 +84,7 @@ int main()
 {
 		int W = 350;
 		int arraySize;
-		cout<<"Enter size of array (6-15): ";
+		cout<<"Enter size of array (1-16): ";
 		cin>>arraySize;
 
 		struct timeval t0,t1;
