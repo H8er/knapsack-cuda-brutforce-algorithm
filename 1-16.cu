@@ -18,8 +18,8 @@ __global__ void T_binary(int*bin_dev, int *_del) {
 __global__ void bin_multiplication(int *bin_dev, int* weight_dev, int *s_dev, int*values_dev)
 {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	s_dev[i] = bin_dev[i] * values_dev[threadIdx.x];//s_dev -> prices*bin
-	bin_dev[i] = bin_dev[i] * weight_dev[threadIdx.x];//bin_dev -> weights*bin
+	s_dev[i] = bin_dev[i] * values_dev[threadIdx.x];
+	bin_dev[i] = bin_dev[i] * weight_dev[threadIdx.x];
 }
 
 __global__ void summing(int* in_dev, int* sums) {
@@ -29,7 +29,7 @@ __global__ void summing(int* in_dev, int* sums) {
 	unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
 	sdata[tid] = in_dev[i];
 	//__syncthreads();
-	//unroled summing is faster than reduction according to my tests
+	//unroled summing 
 #pragma unroll
 for(ushort  i = 1;i < 15;i++){
 	sdata[0]+=sdata[i];
