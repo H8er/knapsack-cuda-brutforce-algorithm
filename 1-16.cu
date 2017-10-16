@@ -83,21 +83,24 @@ __global__ void cycle_max(int *s, int N) {
 int main()
 {
 		int W = 350;
-		int arraySize;
-		cout<<"Enter size of array (1-16): ";
-		cin>>arraySize;
+		cout<<W<<"\n";
+		int arraySize=1;
+		while(arraySize<17){
+			cout<<"Size is "<<arraySize;
+		//cout<<"Enter size of array (1-16): ";
+		//cin>>arraySize;
 
 		struct timeval t0,t1;
 			gettimeofday(&t0, NULL);
 
-		int totalSize = arraySize*pow(2,arraySize);
-		int strSize_b = pow(2,arraySize);
-		int flag=0;
+		int totalSize = arraySize*pow(2,arraySize);//total number of elements to sum
+		int strSize_b = pow(2,arraySize);//number of strings in binary array and connected with him arrays
+		int flag=0;//flag is used if number of items equals to 16
 		if (arraySize>15){
-			strSize_b/=(pow(2,(arraySize-15)));
+			strSize_b/=(pow(2,(arraySize-15)));//special features
 			flag=1;
 		}
-		int *Sum=new int[totalSize];// = { 0 };
+		int *Sum=new int[totalSize];
 		int *s;
 		int *bin_dev;
 		int *weight_dev;
@@ -109,20 +112,20 @@ int main()
 		int *del = new int[arraySize], *dev_del;
 		cudaMalloc((void**)&dev_del, arraySize * sizeof(int));
 		for (int i = 0; i < arraySize; i++) {
-			del[i] = pow(2, i);
+			del[i] = pow(2, i);//array of dergrees of 2
 		}
 
-		cudaMemcpy(dev_del, del, arraySize * sizeof(int), cudaMemcpyHostToDevice);
-		cudaMalloc((void**)&bin_dev, totalSize * sizeof(int));
+		cudaMemcpy(dev_del, del, arraySize * sizeof(int), cudaMemcpyHostToDevice);//copying array of degrees of 2 to global memory of gpu
+		cudaMalloc((void**)&bin_dev, totalSize * sizeof(int));//allocation memory in global memory of GPU for binary array
 
 		int*s_dev;
-		cudaMalloc((void**)&s_dev, totalSize * sizeof(int));
-		cudaMalloc((void**)&weight_dev, arraySize * sizeof(int));
-		cudaMalloc((void**)&s, totalSize * sizeof(int));
-		cudaMalloc((void**)&values_dev, arraySize * sizeof(int));
-		cudaMalloc((void**)&w, totalSize * sizeof(int));
-		cudaMemcpy(weight_dev, weight, arraySize * sizeof(int), cudaMemcpyHostToDevice);
-		cudaMemcpy(values_dev, values, arraySize * sizeof(int), cudaMemcpyHostToDevice);
+		cudaMalloc((void**)&s_dev, totalSize * sizeof(int));//allocation memory in global memory of GPU for array of values multiplied to binary table
+		cudaMalloc((void**)&weight_dev, arraySize * sizeof(int));//allocation memory in global memory of GPU for weights's array
+		cudaMalloc((void**)&s, totalSize * sizeof(int));//allocation memory in global memory of GPU array of sums of values
+		cudaMalloc((void**)&values_dev, arraySize * sizeof(int));//allocation memory in global memory of GPU for values's array
+		cudaMalloc((void**)&w, totalSize * sizeof(int));//allocation memory in global memory of GPU for array of sums of weights
+		cudaMemcpy(weight_dev, weight, arraySize * sizeof(int), cudaMemcpyHostToDevice);//copying of array of weights to global memory of GPU
+		cudaMemcpy(values_dev, values, arraySize * sizeof(int), cudaMemcpyHostToDevice);//copying of array of values to global memory of GPU
 
 //creating of binary table
 		T_binary << <strSize_b, arraySize >> > (bin_dev, dev_del);
@@ -132,7 +135,7 @@ int main()
 
 		summing << <strSize_b, arraySize,arraySize*sizeof(int) >> > (bin_dev, w);
 		summing << <strSize_b, arraySize,arraySize*sizeof(int) >> > (s_dev, s);
-
+//dances with tambourine
 		int a=totalSize/arraySize/1024;
 		int b = 1024;
 		if (a==0){
@@ -160,10 +163,10 @@ cycle_max << <2, 32 >> > (s,32);
 			cycle_max << <1, i >> > (s,i);
 		}
 
-		cudaMemcpy(Sum, s, sizeof(int), cudaMemcpyDeviceToHost);
+		cudaMemcpy(Sum, s, sizeof(int), cudaMemcpyDeviceToHost);//copying maximal value back from GPU
 
 		cout <<"\n"<<"GPU max = " << Sum[0];
-
+//memory freeing
 		cudaFree(bin_dev);
 		cudaFree(weight_dev);
 		cudaFree(s);
@@ -174,11 +177,13 @@ cycle_max << <2, 32 >> > (s,32);
 
 		//float fTimeStart = clock() / (float)(CLOCKS_PER_SEC);
 		if(flag==1){strSize_b*=2;}
+//creating of binary array
 		int **bin = new int*[strSize_b];
 			for(int i=0;i<strSize_b;i++){
 				bin[i] = new int[arraySize];
 			}
 		int k = 0;
+		//filling of binary array
 		for (int i = 0; i < strSize_b; i++) {
 			k = i;
 			for (int j = 0; j <arraySize; j++) {
@@ -186,14 +191,14 @@ cycle_max << <2, 32 >> > (s,32);
 				k /= 2;
 			}
 		}
-
+//creating of arrays for multiplication of weights and values to binary array
 		int **prices  = new int*[strSize_b];
 		int **weights = new int*[strSize_b];
 			for(int i = 0; i < strSize_b; i++){
 				prices[i]  = new int[arraySize];
 				weights[i] = new int[arraySize];
 			}
-
+//multiplication of weights and values to binary array
 		int *Sweig = new int[strSize_b];
 		int *Sval = new int[strSize_b];
 		for (int i = 0; i < strSize_b; i++) {
@@ -202,7 +207,7 @@ cycle_max << <2, 32 >> > (s,32);
 				prices[i][j]  = values[j] * bin[i][j];
 			}
 		}
-
+//summing of arrays
 		for (int i = 0; i < strSize_b; i++) {
 			Sweig[i] = 0 ;Sval[i] = 0;
 			for (int j = 0; j < arraySize; j++) {
@@ -210,7 +215,7 @@ cycle_max << <2, 32 >> > (s,32);
 				Sval[i]  += prices[i][j];
 			}
 		}
-
+//finding of maximal values
 		int max = 0; k = 0;
 		for (int i = 0; i < strSize_b; i++) {
 			if ((Sweig[i] <= W) && (Sval[i] > max)) {
@@ -221,6 +226,7 @@ cycle_max << <2, 32 >> > (s,32);
 		//float fTimeStop = clock() / (float)CLOCKS_PER_SEC;
 		cout << "   CPU max = " << max << "\n";
 		//cout << "CPU time is " << (fTimeStop - fTimeStart) * 1000 << " milli-seconds\n";
+
 //memory freeing
 		for(int i = 0; i < strSize_b; i++){
 			delete [] bin[i];
@@ -233,7 +239,8 @@ cycle_max << <2, 32 >> > (s,32);
 gettimeofday(&t1, 0);
 long sec = (t1.tv_sec-t0.tv_sec);
 long usec =  t1.tv_usec-t0.tv_usec;
-cout<<sec<<","<<usec;
+cout<<sec<<","<<usec<<"\n";
 
+arraySize++;}
 return 0;
 }
