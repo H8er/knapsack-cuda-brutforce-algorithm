@@ -172,9 +172,11 @@ cycle_max << <2, 32 >> > (s,32);
 		cudaFree(s);
 		cudaFree(w);
 		cudaFree(s_dev);
-
+long sec = (t1.tv_sec-t0.tv_sec);
+long usec =  t1.tv_usec-t0.tv_usec;
+cout<<"GPU time is "<<sec<<","<<usec<<"\n";
 		//CPU version
-
+gettimeofday(&t0, NULL);
 		//float fTimeStart = clock() / (float)(CLOCKS_PER_SEC);
 		if(flag==1){strSize_b*=2;}
 //creating of binary array
@@ -237,9 +239,9 @@ cycle_max << <2, 32 >> > (s,32);
 		delete [] Sval;
 
 gettimeofday(&t1, 0);
-long sec = (t1.tv_sec-t0.tv_sec);
-long usec =  t1.tv_usec-t0.tv_usec;
-cout<<sec<<","<<usec<<"\n";
+sec = (t1.tv_sec-t0.tv_sec);
+usec =  t1.tv_usec-t0.tv_usec;
+cout<<"CPU time is "<<sec<<","<<usec<<"\n";
 
 arraySize++;}
 return 0;
