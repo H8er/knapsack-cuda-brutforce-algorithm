@@ -10,7 +10,7 @@
 #define arraySize 16
 using namespace std;
 
-__global__ void single_thread(int* bin_dev,int* weight_dev, int*values_dev,int W,int* NO){
+__global__ void single_thread(int* bin_dev,int* weight_dev, int*values_dev,int W,int* str_num_dev){
 	int th_w_sum = 0;
 	int th_v_sum = 0;
 	int th_bin[arraySize];
@@ -18,7 +18,8 @@ __global__ void single_thread(int* bin_dev,int* weight_dev, int*values_dev,int W
 	__shared__ int sh_v_d[arraySize];
 	__shared__ int sh_maxs[1024];
 	__shared__ int sh_we[1024];
-
+	__shared__ int indexes[1024];
+	indexes[threadIdx.x] = threadIdx.x;
 	#pragma unroll
 	for(uint i = 0;i<arraySize;i++){
 		th_bin[i] = ((blockIdx.x*blockDim.x + threadIdx.x)>>i)%2;
@@ -39,34 +40,43 @@ __global__ void single_thread(int* bin_dev,int* weight_dev, int*values_dev,int W
 			if(sh_maxs[threadIdx.x]<sh_maxs[threadIdx.x + s]){
 			sh_maxs[threadIdx.x]=sh_maxs[threadIdx.x + s];
 			sh_we[threadIdx.x] = sh_we[threadIdx.x + s];
+			indexes[threadIdx.x] = indexes[threadIdx.x + s];
 		}}
 		__syncthreads();
 	}
 	// write result for this block to global mem
 bin_dev[blockIdx.x] = sh_maxs[0];
 bin_dev[blockIdx.x+64] = sh_we[0];
+str_num_dev[blockIdx.x] = indexes[0]+blockIdx.x*blockDim.x;
 }
 
-__global__ void reduction_max(int* s) {
+__global__ void reduction_max(int* s,int* str_num_dev) {
 	extern __shared__ int sdata[];
+	__shared__ int red_ind[64];
+	red_ind[threadIdx.x] = str_num_dev[threadIdx.x];
 	// each thread loads one element from global to shared mem
-	unsigned int tid = threadIdx.x;
+	//unsigned int tid = threadIdx.x;
 	//unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
-	sdata[tid] = s[tid];
+	sdata[threadIdx.x] = s[threadIdx.x];
 	__syncthreads();
 	// do reduction in shared mem
 	for (unsigned int s = blockDim.x / 2; s>0; s >>= 1) {
-		if (tid < s) {
-			if (sdata[tid] < sdata[tid + s]){
-				sdata[tid] = sdata[tid + s];
+		if (threadIdx.x < s) {
+			if (sdata[threadIdx.x] < sdata[threadIdx.x + s]){
+				sdata[threadIdx.x] = sdata[threadIdx.x + s];
 				//sdata[tid+64] = sdata[tid + s+64];
+				red_ind[threadIdx.x] = red_ind[threadIdx.x+s];
 		}}
 		__syncthreads();
 	}
 	// write result for this block to global mem
-	if (tid == 0) {s[0] =sdata[0];}//;s[1] = sdata[65];}
+	if (threadIdx.x == 0) {s[0] =sdata[0]; str_num_dev[0] = red_ind[0];}//;s[1] = sdata[65];}
 }
 
+
+__global__ void which_string(int a,int*view_dev){
+		view_dev[threadIdx.x] = (a>>threadIdx.x)%2;
+}
 int main()
 {
 		int W = 350;
@@ -87,6 +97,10 @@ int main()
 		cudaMalloc((void**)&weight_dev, arraySize * sizeof(int));
 		cudaMalloc((void**)&values_dev, arraySize * sizeof(int));
 
+		int *str_num_dev;
+		int*str_num = new int[strSize_b/1024];
+		cudaMalloc((void**)&str_num_dev,strSize_b/1024*sizeof(int));
+
 		cudaMemcpy(weight_dev, weight, arraySize * sizeof(int), cudaMemcpyHostToDevice);
 		cudaMemcpy(values_dev, values, arraySize * sizeof(int), cudaMemcpyHostToDevice);
 
@@ -95,27 +109,47 @@ long sec,usec;
 
 		int *w_sum;
 		int *v_sum;
-		int *NO;
+
 		cudaMalloc((void**)&w_sum, strSize_b/1024 * sizeof(int));
 		cudaMalloc((void**)&v_sum, strSize_b/1024 * sizeof(int));
-		cudaMalloc((void**)&NO, sizeof(int));
+
 
 gettimeofday(&t0, NULL);
-single_thread<<< strSize_b/1024,1024>>>(bin_dev,weight_dev,values_dev,W,NO);
-reduction_max<<<1,strSize_b/1024,strSize_b/1024*sizeof(int)>>>(bin_dev);
+
+single_thread<<< strSize_b/1024,1024>>>(bin_dev,weight_dev,values_dev,W,str_num_dev);
+reduction_max<<<1,strSize_b/1024,strSize_b/1024*sizeof(int)>>>(bin_dev,str_num_dev);
+
 gettimeofday(&t1, 0);
 cudaMemcpy(Sum, bin_dev, 2*sizeof(int), cudaMemcpyDeviceToHost);
+cudaMemcpy(str_num, str_num_dev, 1*sizeof(int), cudaMemcpyDeviceToHost);
 sec = (t1.tv_sec-t0.tv_sec);
 usec =  t1.tv_usec-t0.tv_usec;
 cout<<"GPU time = "<<sec<<" sec, "<<usec<<" microsec\n";
 
 cout<<"Acheived maximal sum = "<<Sum[0]<<"\n";
-
-
+cout<<"String number "<<str_num[0]<<"\n";
+cudaMemcpy(str_num, str_num_dev, 1*sizeof(int), cudaMemcpyDeviceToHost);
+int*view = new int[arraySize];
+int*view_dev;
+cudaMalloc((void**)&view_dev, arraySize*sizeof(int));
+which_string<<<1,arraySize>>>(str_num[0],view_dev);
+cudaMemcpy(view, view_dev, arraySize*sizeof(int), cudaMemcpyDeviceToHost);
+for(int i = 0;i<arraySize;i++){
+	cout<<view[i]<<" ";
+}cout<<"\n";
+//check
+int checksum = 0;
+for(int i = 0;i<arraySize;i++){
+	checksum+=values[i]*view[i];
+}cout<<"Validation sum = "<<checksum<<"\n";
+checksum = 0;
+for(int i = 0;i<arraySize;i++){
+	checksum+=weight[i]*view[i];
+}cout<<"Weight = "<<checksum<<"\n";
 		cudaFree(bin_dev);
 		cudaFree(weight_dev);
     cudaFree(values_dev);
-		cudaFree(NO);
+		cudaFree(view_dev);
 
 return 0;
 }
