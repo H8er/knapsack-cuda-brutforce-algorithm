@@ -5,14 +5,14 @@
 
 #define arraySize 31 //35 max
 #define def_div 10
-#define W 500
+#define W 700
 #define threads_per_block 32
-#define max_blocks 32768
+#define max_blocks 32
 
 using namespace std;
 
 __constant__ float coefs[arraySize*2];
-__global__ void single_thread(float *sh_sum_dev, long int *str_num_dev, float num_of_blocks, int* bdevX)
+__global__ void single_thread(float *sh_sum_dev, long int *str_num_dev, float num_of_blocks, int* bdevX,int* global_mem_bin)
 {
   float th_w_sum = 0;
    float th_v_sum = 0;
@@ -21,8 +21,8 @@ __global__ void single_thread(float *sh_sum_dev, long int *str_num_dev, float nu
   __shared__ float sh_maxs[threads_per_block];
   __shared__ long int indices[threads_per_block];
   int reached = 0;
-  //indices[threadIdx.x] = blockIdx.x * blockDim.x + threadIdx.x;
-  //__syncthreads();
+  indices[threadIdx.x] = blockIdx.x * blockDim.x + threadIdx.x;
+  __syncthreads();
 
 long signed int num_to_bin = blockIdx.x * blockDim.x + threadIdx.x;
 //num_to_bin += max_blocks * n_of_it;
@@ -69,7 +69,7 @@ while(h-def_div!=-1){
   if(h==arraySize-1){
     int cw = 0;
     int cp = 0;
-    //#pragma unroll
+    #pragma unroll
     for(int i = def_div;i<arraySize;i++){
       cp += coefs[i+arraySize] * th_bin[i];
       cw += coefs[i] * th_bin[i];
@@ -116,14 +116,9 @@ while(h-def_div!=-1){
 
 sh_maxs[threadIdx.x] += reached;
 
-long int num = 0;
-#pragma unroll
-for(int i = 0 ;i<arraySize;i++){
-num+=best_bin[i]*(2<<i);
-}
 
-indices[threadIdx.x] = num;
-str_num_dev[threadIdx.x] = indices[threadIdx.x];
+
+
 __syncthreads();
 //reduction on block
   for (uint offset = blockDim.x >> 1; offset >= 1; offset >>= 1)
@@ -133,7 +128,7 @@ __syncthreads();
 	  if (sh_maxs[threadIdx.x] < sh_maxs[threadIdx.x + offset])
 	    {
 	      sh_maxs[threadIdx.x] = sh_maxs[threadIdx.x + offset];
-	      //indices[threadIdx.x] = indices[threadIdx.x + offset];
+	      indices[threadIdx.x] = indices[threadIdx.x + offset];
 	    }
 	}
       __syncthreads ();
@@ -141,17 +136,23 @@ __syncthreads();
   // write result for this block to global mem
   if(threadIdx.x == 0){
   sh_sum_dev[blockIdx.x] = sh_maxs[0];
-  //str_num_dev[blockIdx.x] = indices[0];
+  str_num_dev[blockIdx.x] = indices[0];
   }
-  //__syncthreads();
+  if(blockIdx.x*blockDim.x+threadIdx.x == indices[0]){
+    #pragma unroll
+    for(int i = 0; i< arraySize;i++){
+      global_mem_bin[blockIdx.x*arraySize + i] = best_bin[i];
+  }
+  }
+  __syncthreads();
 
 }
 
 __global__ void
-reduction_max (float *s, long int *str_num_dev)
+reduction_max (float *s, long int *str_num_dev,int* global_mem_bin)
 {
   int ID = blockIdx.x * blockDim.x + threadIdx.x;
-  __shared__ int sdata[threads_per_block*3];
+  __shared__ int sdata[threads_per_block*2];
   sdata[threadIdx.x] = s[ID];
   sdata[threadIdx.x + threads_per_block] = str_num_dev[ID];
 
@@ -176,17 +177,23 @@ reduction_max (float *s, long int *str_num_dev)
 			//if(sdata[0]>s[0]){//}&&(blockIdx.x>0)){
       s[blockIdx.x] = sdata[0];
       str_num_dev[blockIdx.x] = sdata[threads_per_block];
+
+            #pragma unroll
+            for(int i = 0; i < arraySize;i++){
+              global_mem_bin[i] = global_mem_bin[(sdata[threads_per_block]-arraySize)/threads_per_block*arraySize + i];
+          }
 		}
-    //}
+
 }
 
 
 __global__ void
-which_string (long int a, int *view_dev)
+which_string (long int a, int *view_dev,int* global_mem_bin)
 {
-  view_dev[threadIdx.x] = (a >> threadIdx.x) % 2;
+  view_dev[threadIdx.x] = global_mem_bin[blockIdx.x*arraySize + threadIdx.x];
 }
-///H-S
+
+
 void quickSortR(float* a,float* b, long N) {
 // На входе - массив a[], a[N] - его последний элемент.
 
@@ -246,13 +253,6 @@ void quickSortR(float* a,float* b, long N) {
       }
 
       quickSortR(additional_array,dev_coefs,arraySize-1);
-      cout<<"\n   ";
-      for(int i = 0;i<arraySize;i++){
-        cout<<dev_coefs[i+arraySize]<<" ";
-      }cout<<"\n    ";
-      for(int i = 0;i<arraySize;i++){
-        cout<<dev_coefs[i]<<" ";
-      }cout<<"\n";
 
 
       std::chrono::time_point<std::chrono:: high_resolution_clock> start, end;
@@ -260,7 +260,8 @@ void quickSortR(float* a,float* b, long N) {
 
       int* bdevX;
       cudaMalloc ((void **) &bdevX, arraySize * sizeof (int));
-
+      int* global_mem_bin;
+      cudaMalloc ((void **) &global_mem_bin, max_blocks*arraySize * sizeof (int));
 
     //for(int i = 0;i<arraySize*2;i++){dev_coefs[i] = 2;}
 
@@ -274,14 +275,16 @@ void quickSortR(float* a,float* b, long N) {
 
             //for(int i = 0;i<N_of_rep;i++){
               //cout<<i;
-      single_thread <<< 32, 32 >>> (sh_sum_dev, str_num_dev, num_of_blocks,bdevX);
+      single_thread <<< max_blocks, threads_per_block >>> (sh_sum_dev, str_num_dev, num_of_blocks,bdevX,global_mem_bin);
                  //}
-                 
-reduction_max<<<1,32>>>(sh_sum_dev,str_num_dev);
-int* suda = new int[arraySize];
-      cudaMemcpy (Sum, sh_sum_dev, 32*sizeof (int), cudaMemcpyDeviceToHost);
-      cudaMemcpy (str_num, str_num_dev, sizeof (long int), cudaMemcpyDeviceToHost);
 
+
+
+reduction_max<<<1,max_blocks>>>(sh_sum_dev,str_num_dev,global_mem_bin);
+int* suda = new int[arraySize];
+      cudaMemcpy (Sum, sh_sum_dev, sizeof (int), cudaMemcpyDeviceToHost);
+      cudaMemcpy (str_num, str_num_dev, sizeof (long int), cudaMemcpyDeviceToHost);
+      cudaMemcpy (suda, global_mem_bin, arraySize*sizeof (int), cudaMemcpyDeviceToHost);
 
 
       end = std::chrono:: high_resolution_clock::now();
@@ -295,26 +298,26 @@ int* suda = new int[arraySize];
       cout << "Acheived maximal sum = " << Sum[0] << "\n";
       cout<<str_num[0]<<"\n";
         int *view = new int[arraySize];
-        int *view_dev;
-        cudaMalloc ((void **) &view_dev, arraySize * sizeof (int));
-        which_string <<< 1, arraySize >>> (str_num[0], view_dev);
-        cudaMemcpy (view, view_dev, arraySize * sizeof (int),
-      	      cudaMemcpyDeviceToHost);
+        //int *view_dev;
+        //cudaMalloc ((void **) &view_dev, arraySize * sizeof (int));
+        //which_string <<< 1, arraySize >>> (str_num[0], view_dev,global_mem_bin);
+        //cudaMemcpy (view, view_dev, arraySize * sizeof (int),
+      	  //    cudaMemcpyDeviceToHost);
         for (int i = 0; i < arraySize; i++)
           {
-            cout << view[i] << " ";
+            cout << suda[i] << " ";
           } cout << "\n";
         //check
-        float checksum = 0;
+        int checksum = 0;
         for (int i = 0; i < arraySize; i++)
           {
-            checksum += dev_coefs[i+arraySize] * view[i];
+            checksum += dev_coefs[i+arraySize] * suda[i];
           }
         cout << "Validation sum = " << checksum << "\n";
         checksum = 0;
         for (int i = 0; i < arraySize; i++)
           {
-            checksum += dev_coefs[i] * view[i];
+            checksum += dev_coefs[i] * suda[i];
           } cout << "Weight = " << checksum << "\n";
 
 
@@ -323,6 +326,7 @@ int* suda = new int[arraySize];
         cudaFree (sh_sum_dev);
         cudaFree (str_num_dev);
         cudaFree(bdevX);
+        cudaFree(global_mem_bin);
 
         delete [] Sum;
         delete [] str_num;
