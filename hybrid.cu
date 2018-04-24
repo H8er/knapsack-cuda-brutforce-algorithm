@@ -4,9 +4,9 @@
 #include <chrono>
 
 #define arraySize 31 //35 max
-#define def_div 0
+#define def_div 5
 #define W 500
-#define threads_per_block 1024
+#define threads_per_block 32
 #define max_blocks 32768
 
 using namespace std;
@@ -19,9 +19,9 @@ __global__ void single_thread(float *sh_sum_dev, float *str_num_dev, float num_o
    int th_bin[arraySize];
    int best_bin[arraySize];
   __shared__ float sh_maxs[threads_per_block];
-  __shared__ float indices[threads_per_block];
-
-  indices[threadIdx.x] = threadIdx.x;
+  __shared__ int indices[threads_per_block];
+  int reached = 0;
+  indices[threadIdx.x] = blockIdx.x * blockDim.x + threadIdx.x;
   __syncthreads();
 
 long signed int num_to_bin = blockIdx.x * blockDim.x + threadIdx.x;
@@ -35,7 +35,7 @@ long signed int num_to_bin = blockIdx.x * blockDim.x + threadIdx.x;
       best_bin[i] = th_bin[i];
     }
 #pragma unroll
-    for (uint i = 0; i < arraySize; i++)
+    for (uint i = def_div; i < arraySize; i++)
       {
         th_bin[i] = -1;
       }
@@ -71,21 +71,21 @@ while(h-def_div!=-1){
     int cp = 0;
     //#pragma unroll
     for(int i = def_div;i<arraySize;i++){
-      cp+=coefs[i+arraySize]*th_bin[i];
-      cw += coefs[i]*th_bin[i];
+      cp += coefs[i+arraySize] * th_bin[i];
+      cw += coefs[i] * th_bin[i];
     }
-    if((cw <= Capacity) &&(cp > sh_maxs[threadIdx.x])){
-      sh_maxs[threadIdx.x] = cp;
+    if((cw <= Capacity) &&(cp > reached)){
+      reached = cp;
       #pragma unroll
       for(int i = 0; i < arraySize; i++){
-        best_bin[i]=th_bin[i];
+        best_bin[i] = th_bin[i];
       }
     }
   }
   else{
     int cw = 0;
     for(int i = def_div ; i < arraySize; i++){
-      cw += coefs[i]*th_bin[i];
+      cw += coefs[i] * th_bin[i];
     }
     if (cw > Capacity) forward = false;
     cw = 0;
@@ -93,7 +93,7 @@ while(h-def_div!=-1){
     int nw = 0;
     int np = 0;
     #pragma unroll
-    for(int i = def_div;i<arraySize;i++){
+    for(int i = def_div;i < arraySize;i++){
       np = th_bin[i]!=-1? th_bin[i] * coefs[i+arraySize]:coefs[i+arraySize];
       nw = th_bin[i]!=-1? th_bin[i] * coefs[i]: coefs[i];
       if(cw+nw <= Capacity){
@@ -106,7 +106,7 @@ while(h-def_div!=-1){
       }
     }
     int b = cp;
-    if (b <= sh_maxs[threadIdx.x]){
+    if (b <= reached){
       forward = false;
     }
   }
@@ -114,6 +114,7 @@ while(h-def_div!=-1){
               }
   }
 
+sh_maxs[threadIdx.x] += reached;
 __syncthreads();
 //reduction on block
   for (uint offset = blockDim.x >> 1; offset >= 1; offset >>= 1)
@@ -216,7 +217,7 @@ void quickSortR(float* a,float* b, long N) {
 
       long int strSize_b = pow (2, arraySize);
       int num_of_blocks = strSize_b / threads_per_block;
-      float *Sum = new float[1];	// = { 0 };
+      float *Sum = new float[32];	// = { 0 };
       float *sh_sum_dev;
       //float weight[31] ={ 5, 10, 17, 19, 20, 23, 26, 30, 32, 38, 40, 44, 47, 50, 55, 56, 56, 60, 62, 66, 70, 75, 77, 80, 81, 90,93,96,101,107,115 };
       //float values[31] ={ 10, 13, 16, 22, 30, 25, 55, 90, 110, 115, 130, 120, 150, 170, 194, 199, 194, 199, 217, 230, 248, 250, 264, 271, 279, 286,293,299,305,313,321 };
@@ -271,11 +272,13 @@ void quickSortR(float* a,float* b, long N) {
 
             //for(int i = 0;i<N_of_rep;i++){
               //cout<<i;
-      single_thread <<< 1, threads_per_block >>> (sh_sum_dev, str_num_dev, num_of_blocks,bdevX);
+      single_thread <<< 32, 32 >>> (sh_sum_dev, str_num_dev, num_of_blocks,bdevX);
                  //}
-
+                 cudaMemcpy (Sum, sh_sum_dev, 32*sizeof (int), cudaMemcpyDeviceToHost);
+                 for(int i = 0; i < 32;i++){cout<<Sum[i]<<" ";}cout<<"\n";
+reduction_max<<<1,32>>>(sh_sum_dev,str_num_dev);
 int* suda = new int[arraySize];
-      cudaMemcpy (Sum, sh_sum_dev, sizeof (int), cudaMemcpyDeviceToHost);
+      cudaMemcpy (Sum, sh_sum_dev, 32*sizeof (int), cudaMemcpyDeviceToHost);
       cudaMemcpy (suda, bdevX, arraySize * sizeof (int), cudaMemcpyDeviceToHost);
 
 
@@ -318,7 +321,7 @@ int* suda = new int[arraySize];
         start = std::chrono::high_resolution_clock::now();
 
         int h = 0;
-        int k = def_div;
+        int k = h;//def_div;
         long int ns = 0;
         bool forward;
         while(h-k!=-1){
