@@ -3,9 +3,9 @@
 #include <iostream>
 #include <chrono>
 
-#define arraySize 31 //35 max
+#define arraySize 29 //35 max
 #define def_div 10
-#define W 700
+#define W 31
 #define threads_per_block 32
 #define max_blocks 32
 
@@ -254,6 +254,7 @@ void quickSortR(float* a,float* b, long N) {
 
       quickSortR(additional_array,dev_coefs,arraySize-1);
 
+      for(int i = 0;i<arraySize*2;i++){dev_coefs[i] = 2;}
 
       std::chrono::time_point<std::chrono:: high_resolution_clock> start, end;
           start = std::chrono::high_resolution_clock::now();
@@ -263,7 +264,7 @@ void quickSortR(float* a,float* b, long N) {
       int* global_mem_bin;
       cudaMalloc ((void **) &global_mem_bin, max_blocks*arraySize * sizeof (int));
 
-    //for(int i = 0;i<arraySize*2;i++){dev_coefs[i] = 2;}
+
 
 
 
