@@ -3,8 +3,8 @@
 #include <iostream>
 #include <chrono>
 
-#define arraySize 29 //35 max
-#define def_div 10
+#define arraySize 31 //35 max
+#define def_div 10  // 5<=X<=15
 #define W 31
 #define threads_per_block 32
 #define max_blocks 32
