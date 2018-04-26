@@ -7,7 +7,7 @@
 #define def_div 10  // 5<=X<=15
 #define W 31
 #define threads_per_block 32
-#define max_blocks 32
+//#define max_blocks 32
 
 using namespace std;
 
@@ -223,7 +223,7 @@ void quickSortR(float* a,float* b, long N) {
 
 
     int main(){
-
+      int max_blocks = pow(2,def_div)/threads_per_block;
       long int strSize_b = pow (2, arraySize);
       int num_of_blocks = strSize_b / threads_per_block;
       float *Sum = new float[32];	// = { 0 };
