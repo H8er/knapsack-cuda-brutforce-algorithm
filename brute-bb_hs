@@ -1,0 +1,497 @@
+#include <cuda.h>
+#include "cuda_runtime.h"
+#include <iostream>
+#include <chrono>
+#include <stdio.h>
+#include <fstream>
+
+
+
+#define arraySize 31 //35 max
+#define W 500
+
+using namespace std;
+
+__constant__ float coefs[arraySize*2];
+__global__ void single_thread(float *sh_sum_dev, float *str_num_dev, float num_of_blocks, int rep,int threads_per_block,int max_blocks)
+{
+  register float th_w_sum = 0;
+  register float th_v_sum = 0;
+  register float th_bin[arraySize];
+  register int n_of_it = rep;
+  extern __shared__ float sh_array[];
+  float* sh_maxs = (float*)sh_array;
+  int* indices = (int*)&sh_maxs[threads_per_block];
+  indices[threadIdx.x] = blockIdx.x * blockDim.x + threadIdx.x;
+
+
+long signed int num_to_bin = indices[threadIdx.x];
+num_to_bin += max_blocks * n_of_it;
+__syncthreads();
+#pragma unroll
+  for (uint i = 0; i < arraySize; i++)
+    {
+      th_bin[i] = ((num_to_bin) >> i) % 2;
+
+      th_w_sum += th_bin[i] * coefs[i];
+      th_v_sum += th_bin[i] * coefs[i+arraySize];
+    }
+
+sh_maxs[threadIdx.x] = (th_w_sum > W) ? 0:th_v_sum;
+
+__syncthreads ();
+
+  for (uint offset = blockDim.x >> 1; offset >= 1; offset >>= 1)
+    {
+      if (threadIdx.x < offset)
+	{
+	  if (sh_maxs[threadIdx.x] < sh_maxs[threadIdx.x + offset])
+	    {
+	      sh_maxs[threadIdx.x] = sh_maxs[threadIdx.x + offset];
+	      indices[threadIdx.x] = indices[threadIdx.x + offset];
+	    }
+	}
+      __syncthreads ();
+    }
+  // write result for this block to global mem
+  if(threadIdx.x == 0){
+  sh_sum_dev[blockIdx.x+max_blocks*rep] = sh_maxs[0];
+  str_num_dev[blockIdx.x+max_blocks*rep] = indices[0]+max_blocks*rep;
+}
+
+}
+
+__global__ void
+reduction_max (float *s, float *str_num_dev,int threads_per_block)
+{
+  int ID = blockIdx.x * blockDim.x + threadIdx.x;
+  extern __shared__ float sdata[];
+  sdata[threadIdx.x] = s[ID];
+  sdata[threadIdx.x + threads_per_block] = str_num_dev[ID];
+
+  __syncthreads ();
+  // do reduction in shared mem
+  for (uint s = blockDim.x >>1; s > 0; s >>= 1)
+    {
+      if (threadIdx.x < s)
+	{
+	  if (sdata[threadIdx.x] < sdata[threadIdx.x + s])
+	    {
+	      sdata[threadIdx.x] = sdata[threadIdx.x + s];
+	      sdata[threadIdx.x + threads_per_block] =
+		sdata[threadIdx.x + threads_per_block + s];
+	    }
+	}
+      __syncthreads ();
+    }
+  // write result for this block to global mem
+  if (threadIdx.x == 0)
+    {
+			//if(sdata[0]>s[0]){//}&&(blockIdx.x>0)){
+      s[blockIdx.x] = sdata[0];
+      str_num_dev[blockIdx.x] = sdata[threads_per_block];
+		}
+
+    //}
+}
+
+__global__ void
+which_string (int a, int *view_dev)
+{
+  view_dev[threadIdx.x] = (a >> threadIdx.x) % 2;
+}
+///H-S
+void quickSortR(float* a,float* b, long N) {
+// На входе - массив a[], a[N] - его последний элемент.
+
+    long i = 0, j = N;      // поставить указатели на исходные места
+    float temp, p;
+
+    p = a[ N>>1 ];      // центральный элемент
+
+    // процедура разделения
+    do {
+        while ( a[i] > p ) i++;
+        while ( a[j] < p ) j--;
+
+        if (i <= j) {
+            temp = a[i]; a[i] = a[j]; a[j] = temp;
+            temp = b[i]; b[i] = b[j]; b[j] = temp;
+            temp = b[i+arraySize]; b[i+arraySize] = b[j+arraySize]; b[j+arraySize] = temp;
+            i++; j--;
+        }
+    } while ( i<=j );
+
+    // рекурсивные вызовы, если есть, что сортировать
+    if ( j > 0 ) quickSortR(a,b, j);
+    if ( N > i ) quickSortR(a+i,b+i, N-i);
+}
+
+
+__global__ void HS_device(int* bdevX, int* dreached){
+  int X[arraySize];
+  #pragma unroll
+  for(int i = 0; i < arraySize; i++){
+    X[i] = -1;
+  }
+  int h = 0;
+  long int ns = 0;
+  bool forward;
+  while(h!=-1){
+    ns++;
+    forward = true;
+    if(X[h]==-1){
+      X[h]=1;
+    }else{
+    if(X[h]==1){
+      X[h]=0;
+    }else{
+    if(X[h]==0){
+      X[h]=-1;
+      h--;
+      forward=false;
+    }
+  }
+  }
+    if(h==arraySize-1){
+      int cw = 0;
+      int cp = 0;
+      #pragma unroll
+      for(int i = 0;i<arraySize;i++){
+        cp+=coefs[i+arraySize]*X[i];
+        cw += coefs[i]*X[i];
+      }
+      if((cw <= W) &&(cp > dreached[0])){
+        dreached[0] = cp;
+        #pragma unroll
+        for(int i = 0; i < arraySize; i++){
+          bdevX[i] = X[i];
+        }
+      }
+    }
+    else{
+      int cw = 0;
+      for(int i = 0 ; i < arraySize; i++){
+        cw += coefs[i]*X[i];
+      }
+      if (cw > W) forward = false;
+      cw = 0;
+      float cp = 0;
+      int nw = 0;
+      int np = 0;
+      #pragma unroll
+      for(int i = 0;i<arraySize;i++){
+        np = X[i]!=-1? X[i] * coefs[i+arraySize]:coefs[i+arraySize];
+        nw = X[i]!=-1? X[i] * coefs[i]: coefs[i];
+        if(cw+nw <= W){
+          cw += nw;
+          cp += np;
+        }
+        else{
+          cp+=np*(W-cw)/nw;
+          break;
+        }
+      }
+      int b = cp;
+      if (b <= dreached[0]){
+        forward = false;
+      }
+    }
+    if(forward){if(h<arraySize-1){h++;}}
+    }
+}
+
+
+int main(){
+  cudaDeviceProp deviceProp;
+  cudaGetDeviceProperties(&deviceProp, 0);
+  int threads_per_block = deviceProp.maxThreadsDim[0];
+  int max_blocks = deviceProp.maxGridSize[0]/2;
+  long int strSize_b = pow (2, arraySize);
+  int num_of_blocks = strSize_b / threads_per_block;
+  float *Sum = new float[1];	// = { 0 };
+  float *sh_sum_dev;
+  //float weight[31] ={ 5, 10, 17, 19, 20, 23, 26, 30, 32, 38, 40, 44, 47, 50, 55, 56, 56, 60, 62, 66, 70, 75, 77, 80, 81, 90,93,96,101,107,115 };
+  //float values[31] ={ 10, 13, 16, 22, 30, 25, 55, 90, 110, 115, 130, 120, 150, 170, 194, 199, 194, 199, 217, 230, 248, 250, 264, 271, 279, 286,293,299,305,313,321 };
+  float dev_coefs[62] = {5, 10, 17, 19, 20, 23, 26, 30, 32, 38, 40, 44, 47, 50, 55, 56, 56, 60, 62, 66, 70, 75, 77, 80, 81, 90,93,96,101,107,115, 10, 13, 16, 22, 30, 25, 55, 90, 110, 115, 130, 120, 150, 170, 194, 199, 194, 199, 217, 230, 248, 250, 264, 271, 279, 286,293,299,305,313,321 };
+  //float dev_coefs[60] = {5, 10, 17, 19, 20, 23, 26, 30, 32, 38, 40, 44, 47, 50, 55, 56, 56, 60, 62, 66, 70, 75, 77, 80, 81, 90,93,96,101,107, 10, 13, 16, 22, 30, 25, 55, 90, 110, 115, 130, 120, 150, 170, 194, 199, 194, 199, 217, 230, 248, 250, 264, 271, 279, 286,293,299,305,313 };
+  //float dev_coefs[58] = {5, 10, 17, 19, 20, 23, 26, 30, 32, 38, 40, 44, 47, 50, 55, 56, 56, 60, 62, 66, 70, 75, 77, 80, 81, 90,93,96,101, 10, 13, 16, 22, 30, 25, 55, 90, 110, 115, 130, 120, 150, 170, 194, 199, 194, 199, 217, 230, 248, 250, 264, 271, 279, 286,293,299,305 };
+
+  //float *values_dev;
+  float *str_num_dev;
+  int *str_num = new int[1];
+  float N_of_rep;
+  N_of_rep = num_of_blocks/max_blocks>0?num_of_blocks/max_blocks:1;
+  cout <<"N of items "<<arraySize<<"\n";
+  cout<<"N of blocks "<<num_of_blocks<<"\n";
+  cout<<"strSize_b = "<<strSize_b<<"\n";
+  cout<<"num_of_blocks / threads_per_block = "<<num_of_blocks / threads_per_block<<"\n";
+  cout<<"N of repeats = "<<N_of_rep<<"\n";
+  int sing_blocks = num_of_blocks/N_of_rep>0?num_of_blocks/N_of_rep:1;
+  cout<<"sing param = "<<sing_blocks<<" _ "<< threads_per_block<<"\n";
+  cout<<"red param "<<num_of_blocks / threads_per_block<<"  ,  "<<strSize_b/num_of_blocks<<"\n";
+
+
+//for(int i = 0;i<arraySize*2;i++){dev_coefs[i] = 2;}
+
+  std::chrono::time_point<std::chrono:: high_resolution_clock> start, end;
+
+      start = std::chrono::high_resolution_clock::now();
+
+  cudaMalloc ((void **) &sh_sum_dev,  num_of_blocks * sizeof (float));
+  cudaMalloc ((void **) &str_num_dev, num_of_blocks * sizeof (float));
+  cudaMemcpyToSymbol (coefs, dev_coefs, 2*arraySize * sizeof (float));
+
+
+
+        for(int i = 0;i<N_of_rep;i++){
+          //cout<<i;
+  single_thread <<< sing_blocks, threads_per_block,threads_per_block*2*sizeof(int) >>> (sh_sum_dev, str_num_dev, num_of_blocks,i,threads_per_block,sing_blocks);
+             }
+
+int k = num_of_blocks/threads_per_block;
+while(k>=1){
+//cout<<k<<" ";
+               reduction_max <<<k, threads_per_block,threads_per_block*2*sizeof(int)>>> (sh_sum_dev, str_num_dev,threads_per_block);
+               if(k>=threads_per_block){k/=threads_per_block;}
+               else break;
+             }
+if(k>1){
+reduction_max <<<1,k,k*2*sizeof(int)>>> (sh_sum_dev, str_num_dev,k);
+}
+
+  cudaMemcpy (Sum, sh_sum_dev, sizeof (float), cudaMemcpyDeviceToHost);
+  cudaMemcpy (str_num, str_num_dev, sizeof (float), cudaMemcpyDeviceToHost);
+
+  end = std::chrono:: high_resolution_clock::now();
+
+      int elapsed_seconds = std::chrono::duration_cast<std::chrono::microseconds>
+                               (end-start).count();
+      std::time_t end_time = std::chrono::system_clock::to_time_t(end);
+
+      std::cout<< "Время выполнения: " << elapsed_seconds << "microseconds\n";
+
+  cout << "Acheived maximal sum = " << Sum[0] << "\n";
+  cout << "String number " << int(str_num[0]) << "\n";
+
+  int *view = new int[arraySize];
+  int *view_dev;
+  cudaMalloc ((void **) &view_dev, arraySize * sizeof (int));
+  which_string <<< 1, arraySize >>> (str_num[0], view_dev);
+  cudaMemcpy (view, view_dev, arraySize * sizeof (int),
+	      cudaMemcpyDeviceToHost);
+  for (int i = 0; i < arraySize; i++)
+    {
+      cout << view[i] << " ";
+    } cout << "\n";
+  //check
+  float checksum = 0;
+  for (int i = 0; i < arraySize; i++)
+    {
+      checksum += dev_coefs[i+arraySize] * view[i];
+    }
+  cout << "Validation sum = " << checksum << "\n";
+  checksum = 0;
+  for (int i = 0; i < arraySize; i++)
+    {
+      checksum += dev_coefs[i] * view[i];
+    } cout << "Weight = " << checksum << "\n";
+
+    ofstream fout;
+    fout.open("data_uncorr_brut.txt",ios_base::app);
+
+    fout<<"GPU\n"<<Sum[0]<<"\n"<<elapsed_seconds<<"\n\n";
+
+  cudaFree (sh_sum_dev);
+  cudaFree (str_num_dev);
+  cudaFree (coefs);
+  cudaFree (view_dev);
+
+
+cout<<"CPU version:\n";
+
+float *cpu_bin = new float[arraySize];
+int max = 0;
+int cpu_str = 0;
+
+start = std::chrono::high_resolution_clock::now();
+
+for(long int i = 0;i<strSize_b;i++){
+  int tmp = 0;int cap = 0;
+    long int tobin = i;
+    for(int k = 0; k<arraySize;k++){
+      cpu_bin[k] = tobin%2;
+      tobin >>= 1;
+      tmp += cpu_bin[k]*dev_coefs[arraySize+k];//
+      cap += cpu_bin[k]*dev_coefs[k];
+    }
+    if((cap<=W)&&(tmp>max)){max = tmp;cpu_str = i;}
+}
+
+end = std::chrono:: high_resolution_clock::now();
+
+    elapsed_seconds = std::chrono::duration_cast<std::chrono::microseconds>
+                             (end-start).count();
+    end_time = std::chrono::system_clock::to_time_t(end);
+cout<<"Max = "<<max<<"   sting numer "<<cpu_str<<"\n";
+    std::cout<< "Время выполнения: " << elapsed_seconds << "microseconds\n";
+
+    fout<<"CPU\n"<<max<<"\n"<<elapsed_seconds<<"\n\n";
+
+//H-S
+
+cout<<"H-S\n";
+int *X = new int[arraySize];
+int *bestX = new int[arraySize];
+for(int i = 0; i < arraySize; i++){
+  X[i] = -1;
+  bestX[i] = 0;
+}
+int curr_sum = 0;
+int reached_max = 0;
+
+
+//sort
+
+  start = std::chrono::high_resolution_clock::now();
+
+float* additional_array = new float[arraySize];
+
+for(int i = 0; i < arraySize;i++){
+additional_array[i] = dev_coefs[i+arraySize]/dev_coefs[i];
+}
+
+quickSortR(additional_array,dev_coefs,arraySize-1);
+int div = 0;
+int h = div;
+long int ns = 0;
+bool forward;
+while(h-div!=-1){
+  ns++;
+  forward = true;
+  if(X[h]==-1){
+    X[h]=1;
+  }else{
+  if(X[h]==1){
+    X[h]=0;
+  }else{
+  if(X[h]==0){
+    X[h]=-1;
+    h--;
+    forward=false;
+  }
+}
+}
+  if(h==arraySize-1){
+    int cw = 0;
+    int cp = 0;
+    for(int i = 0;i<arraySize;i++){
+      cp+=dev_coefs[i+arraySize]*X[i];
+      cw += dev_coefs[i]*X[i];
+    }
+    if((cw <= W) &&(cp > reached_max)){
+      reached_max = cp;
+      for(int i = 0; i < arraySize; i++){
+        bestX[i] = X[i];
+      }
+    }
+  }
+  else{
+    int cw = 0;
+    for(int i = 0 ; i < arraySize; i++){
+      cw += dev_coefs[i]*X[i];
+    }
+    if (cw > W) forward = false;
+    cw = 0;
+    float cp = 0;
+    int nw = 0;
+    int np = 0;
+    for(int i = 0;i<arraySize;i++){
+      np = X[i]!=-1? X[i] * dev_coefs[i+arraySize]:dev_coefs[i+arraySize];
+      nw = X[i]!=-1? X[i] * dev_coefs[i]: dev_coefs[i];
+      if(cw+nw <= W){
+        cw += nw;
+        cp += np;
+      }
+      else{
+        cp+=np*(W-cw)/nw;
+        break;
+      }
+    }
+    int b = cp;
+    if (b <= reached_max){
+      forward = false;
+    }
+  }
+  if(forward){if(h<arraySize-1){h++;}}
+  }
+
+  end = std::chrono:: high_resolution_clock::now();
+
+      elapsed_seconds = std::chrono::duration_cast<std::chrono::microseconds>
+                               (end-start).count();
+      end_time = std::chrono::system_clock::to_time_t(end);
+
+
+  std::cout<< "Время выполнения: " << elapsed_seconds << "microseconds\n";
+
+cout<<"MAX = "<<reached_max<<"\n";
+for(int k = 0 ; k < arraySize;k++){
+cout<<bestX[k];
+curr_sum += bestX[k]*dev_coefs[k+arraySize];
+}cout<<"\nЧисло итераций = "<<ns<<"\n";
+
+
+
+
+/*
+cout<<"dev HS\n";
+start = std::chrono::high_resolution_clock::now();
+//alloc X, create device vars
+int* bdevX;
+int* dreached;
+int* hostreached = new int[1];
+float* additional_array = new float[arraySize];
+int *X = new int[arraySize];
+
+int *bestX = new int[arraySize];
+for(int i = 0; i < arraySize; i++){
+  X[i] = -1;
+  bestX[i] = 0;
+}
+
+for(int i = 0; i < arraySize;i++){
+additional_array[i] = dev_coefs[i+arraySize]/dev_coefs[i];
+}
+
+quickSortR(additional_array,dev_coefs,arraySize-1);
+
+cudaMalloc ((void **) &bdevX, arraySize * sizeof (int));
+cudaMalloc ((void **) &dreached, sizeof (int));
+
+cudaMemcpyToSymbol (coefs, dev_coefs, 2*arraySize * sizeof (float));
+
+HS_device<<<1,1>>>(bdevX, dreached);
+
+cudaMemcpy (bestX, bdevX, arraySize * sizeof (int),cudaMemcpyDeviceToHost);
+cudaMemcpy (hostreached, dreached, sizeof (int),cudaMemcpyDeviceToHost);
+
+            cout<<hostreached[0]<<"\n";
+            for(int k = 0 ; k < arraySize;k++){
+            cout<<bestX[k];
+          }cout<<"\n";
+
+            end = std::chrono:: high_resolution_clock::now();
+
+              elapsed_seconds = std::chrono::duration_cast<std::chrono::microseconds>
+                                       (end-start).count();
+              end_time = std::chrono::system_clock::to_time_t(end);
+
+              std::cout<< "Время выполнения: " << elapsed_seconds << "microseconds\n";
+
+              fout<<"GPU 1th H_S\n"<<hostreached[0]<<"\n"<<elapsed_seconds<<"\n\n";
+              cudaFree(dreached);
+              cudaFree(bdevX);
+*/
+  return 0;
+}
