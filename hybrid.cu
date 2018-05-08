@@ -13,7 +13,7 @@
 using namespace std;
 
 __constant__ float coefs[arraySize*2];
-__global__ void single_thread(float *sh_sum_dev, long int *str_num_dev, float num_of_blocks, int* bdevX,int* global_mem_bin,int threads_per_block)
+__global__ void hybrid(float *sh_sum_dev, long int *str_num_dev, float num_of_blocks, int* bdevX,int* global_mem_bin,int threads_per_block)
 {
   float th_w_sum = 0;
    float th_v_sum = 0;
@@ -77,7 +77,7 @@ while(h-def_div!=-1){
     if((cw <= Capacity) &&(cp > reached)){
       reached = cp;
       #pragma unroll
-      for(int i = 0; i < arraySize; i++){
+      for(int i = def_div; i < arraySize; i++){
         best_bin[i] = th_bin[i];
       }
     }
@@ -145,12 +145,12 @@ __syncthreads();
 }
 
 __global__ void
-reduction_max (float *s, long int *str_num_dev,int* global_mem_bin,int threads_per_block)
+hybrid_reduction (float *s, long int *str_num_dev,int* global_mem_bin,int threads_per_block)
 {
   int ID = blockIdx.x * blockDim.x + threadIdx.x;
-  extern __shared__ int sdata[];
-  sdata[threadIdx.x] = s[ID];
-  sdata[threadIdx.x + threads_per_block] = str_num_dev[ID];
+  extern __shared__ int sh_hy_data[];
+  sh_hy_data[threadIdx.x] = s[ID];
+  sh_hy_data[threadIdx.x + threads_per_block] = str_num_dev[ID];
 
   __syncthreads ();
   // do reduction in shared mem
@@ -158,11 +158,11 @@ reduction_max (float *s, long int *str_num_dev,int* global_mem_bin,int threads_p
     {
       if (threadIdx.x < s)
 	{
-	  if (sdata[threadIdx.x] < sdata[threadIdx.x + s])
+	  if (sh_hy_data[threadIdx.x] < sh_hy_data[threadIdx.x + s])
 	    {
-	      sdata[threadIdx.x] = sdata[threadIdx.x + s];
-	      sdata[threadIdx.x + threads_per_block] =
-		sdata[threadIdx.x + threads_per_block + s];
+	      sh_hy_data[threadIdx.x] = sh_hy_data[threadIdx.x + s];
+	      sh_hy_data[threadIdx.x + threads_per_block] =
+		sh_hy_data[threadIdx.x + threads_per_block + s];
 	    }
 	}
       __syncthreads ();
@@ -170,14 +170,14 @@ reduction_max (float *s, long int *str_num_dev,int* global_mem_bin,int threads_p
   // write result for this block to global mem
   if (threadIdx.x == 0)
     {
-			//if(sdata[0]>s[0]){//}&&(blockIdx.x>0)){
-      s[blockIdx.x] = sdata[0];
-      str_num_dev[blockIdx.x] = sdata[threads_per_block];
+			//if(sh_hy_data[0]>s[0]){//}&&(blockIdx.x>0)){
+      s[blockIdx.x] = sh_hy_data[0];
+      str_num_dev[blockIdx.x] = sh_hy_data[threads_per_block];
 
             #pragma unroll
             for(int i = 0; i < arraySize;i++){
-              global_mem_bin[i] = global_mem_bin[(sdata[threads_per_block]-arraySize)/threads_per_block*arraySize + i];
-              //global_mem_bin[i] = global_mem_bin[sdata[threads_per_block]*arraySize+i];
+             global_mem_bin[i] = global_mem_bin[(sh_hy_data[threads_per_block]/arraySize)*arraySize + i];
+
           }
 		}
 
@@ -185,9 +185,9 @@ reduction_max (float *s, long int *str_num_dev,int* global_mem_bin,int threads_p
 
 
 __global__ void
-which_string (long int a, int *view_dev,int* global_mem_bin)
+which_string (long int a, int *view_dev)
 {
-  view_dev[threadIdx.x] = global_mem_bin[blockIdx.x*arraySize + threadIdx.x];
+  view_dev[threadIdx.x] = (a>>threadIdx.x)%2;
 }
 
 
@@ -218,7 +218,6 @@ void quickSortR(float* a,float* b, long N) {
 }
 
 
-
     int main(){
       cudaDeviceProp deviceProp;
       cudaGetDeviceProperties(&deviceProp, 0);
@@ -231,6 +230,7 @@ void quickSortR(float* a,float* b, long N) {
       //float weight[31] ={ 5, 10, 17, 19, 20, 23, 26, 30, 32, 38, 40, 44, 47, 50, 55, 56, 56, 60, 62, 66, 70, 75, 77, 80, 81, 90,93,96,101,107,115 };
       //float values[31] ={ 10, 13, 16, 22, 30, 25, 55, 90, 110, 115, 130, 120, 150, 170, 194, 199, 194, 199, 217, 230, 248, 250, 264, 271, 279, 286,293,299,305,313,321 };
       float dev_coefs[62] = {2,1,8,2,17,22,21,33,54,53,29,34,91,24,82,91,51,9,64,14,44,30,23,98,38,55,98,64,57,80,66,49,24,89,15,87,86,77,81,89,82,44,38,86,22,75,72,40,7,47,9,28,17,10,42,15,20,32,15,6,4,1};
+
       //float dev_coefs[60] = {5, 10, 17, 19, 20, 23, 26, 30, 32, 38, 40, 44, 47, 50, 55, 56, 56, 60, 62, 66, 70, 75, 77, 80, 81, 90,93,96,101,107, 10, 13, 16, 22, 30, 25, 55, 90, 110, 115, 130, 120, 150, 170, 194, 199, 194, 199, 217, 230, 248, 250, 264, 271, 279, 286,293,299,305,313 };
       //float dev_coefs[58] = {5, 10, 17, 19, 20, 23, 26, 30, 32, 38, 40, 44, 47, 50, 55, 56, 56, 60, 62, 66, 70, 75, 77, 80, 81, 90,93,96,101, 10, 13, 16, 22, 30, 25, 55, 90, 110, 115, 130, 120, 150, 170, 194, 199, 194, 199, 217, 230, 248, 250, 264, 271, 279, 286,293,299,305 };
 
@@ -247,6 +247,9 @@ void quickSortR(float* a,float* b, long N) {
       }
 
       quickSortR(additional_array,dev_coefs,arraySize-1);
+
+	float t1,t2;
+	float acceleration = 0;
 
       //for(int i = 0;i<arraySize*2;i++){dev_coefs[i] = 2;}
 
@@ -266,16 +269,14 @@ void quickSortR(float* a,float* b, long N) {
       cudaMalloc ((void **) &str_num_dev, num_of_blocks * sizeof (float));
       cudaMemcpyToSymbol (coefs, dev_coefs, 2*arraySize * sizeof (float));
 
-    //int sing_blocks = num_of_blocks/N_of_rep;
-
-            //for(int i = 0;i<N_of_rep;i++){
-              //cout<<i;
-      single_thread <<< max_blocks, threads_per_block ,threads_per_block*2*sizeof(int)>>> (sh_sum_dev, str_num_dev, num_of_blocks,bdevX,global_mem_bin,threads_per_block);
-                 //}
 
 
 
-reduction_max<<<1,max_blocks,threads_per_block*2*sizeof(int)>>>(sh_sum_dev,str_num_dev,global_mem_bin,threads_per_block);
+       hybrid <<< max_blocks, threads_per_block ,threads_per_block*2*sizeof(int)>>> (sh_sum_dev, str_num_dev, num_of_blocks,bdevX,global_mem_bin,threads_per_block);
+
+
+
+hybrid_reduction<<<1,max_blocks,threads_per_block*2*sizeof(int)>>>(sh_sum_dev,str_num_dev,global_mem_bin,threads_per_block);
 int* suda = new int[arraySize];
       cudaMemcpy (Sum, sh_sum_dev, sizeof (int), cudaMemcpyDeviceToHost);
       cudaMemcpy (str_num, str_num_dev, sizeof (long int), cudaMemcpyDeviceToHost);
@@ -289,19 +290,15 @@ int* suda = new int[arraySize];
           std::time_t end_time = std::chrono::system_clock::to_time_t(end);
 
           std::cout<< "Время выполнения: " << elapsed_seconds << "microseconds\n";
-
+	t1 = elapsed_seconds;
       cout << "Acheived maximal sum = " << Sum[0] << "\n";
-      cout<<str_num[0]<<"\n";
-        int *view = new int[arraySize];
-        //int *view_dev;
-        //cudaMalloc ((void **) &view_dev, arraySize * sizeof (int));
-        //which_string <<< 1, arraySize >>> (str_num[0], view_dev,global_mem_bin);
-        //cudaMemcpy (view, view_dev, arraySize * sizeof (int),
-      	  //    cudaMemcpyDeviceToHost);
+
         for (int i = 0; i < arraySize; i++)
           {
             cout << suda[i];
           } cout << "\n";
+
+
         //check
         int checksum = 0;
         for (int i = 0; i < arraySize; i++)
@@ -312,12 +309,12 @@ int* suda = new int[arraySize];
         checksum = 0;
         for (int i = 0; i < arraySize; i++)
           {
-            checksum += dev_coefs[i] * suda[i];
+            checksum += dev_coefs[i] * suda[i];            
           } cout << "Weight = " << checksum << "\n";
-          ofstream fout;
-          fout.open("data_uncorr_hybrid.txt",ios_base::app);
+         // ofstream fout;
+         // fout.open("data_uncorr_hybrid.txt",ios_base::app);
 
-          fout<<"GPU\n"<<Sum[0]<<"\n"<<elapsed_seconds<<"\n\n";
+         // fout<<"GPU\n"<<Sum[0]<<"\n"<<elapsed_seconds<<"\n\n";
 
 
 
@@ -418,21 +415,26 @@ int* suda = new int[arraySize];
               elapsed_seconds = std::chrono::duration_cast<std::chrono::microseconds>
                                        (end-start).count();
                end_time = std::chrono::system_clock::to_time_t(end);
-
+		t2 = elapsed_seconds;
           std::cout<< "Время выполнения: " << elapsed_seconds << "microseconds\n";
 
         cout<<"MAX = "<<reached_max<<"\n";
-        for(int k = 0 ; k < arraySize;k++){
-        cout<<bestX[k];
-        curr_sum += bestX[k]*dev_coefs[k+arraySize];
+        for(int m = 0 ; m < arraySize;m++){
+        cout<<bestX[m];
+        curr_sum += bestX[m]*dev_coefs[m+arraySize];
         }cout<<"\nЧисло итераций = "<<ns<<"\n";
 
 
-        fout<<"CPU\n"<<reached_max<<"\n"<<elapsed_seconds<<"\n\n";
-        fout.close();
-
+       // fout<<"CPU\n"<<reached_max<<"\n"<<elapsed_seconds<<"\n\n";
+      //  fout.close();
+acceleration = t2/t1;
+cout<<"Acceleration = "<<acceleration<<"\n";
 delete [] suda;
 delete [] additional_array;
+
+cudaFree (sh_sum_dev);
+cudaFree (str_num_dev);
+cudaFree (coefs);
 
 return 0;
 }
